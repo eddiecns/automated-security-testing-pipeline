@@ -68,4 +68,3 @@ jobs:
           name: zap-baseline-reports
           path: reports/
           if-no-files-found: warn
-'@ | Set-Content -Encoding utf8 .github/workflows/zap-baseline.yml
