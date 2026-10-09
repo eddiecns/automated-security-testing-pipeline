@@ -45,7 +45,10 @@ jobs:
           exit 1
 
       - name: Prepare report directory
-        run: mkdir -p reports
+        run: |
+          mkdir -p reports
+          chmod 777 reports
+          ls -ld reports
 
       - name: Run ZAP baseline scan
         id: zap
