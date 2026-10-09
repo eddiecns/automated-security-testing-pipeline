@@ -50,12 +50,16 @@ jobs:
           chmod 777 reports
           ls -ld reports
 
+
       - name: Run ZAP baseline scan
         id: zap
         continue-on-error: true
         run: |
           docker pull ghcr.io/zaproxy/zaproxy:stable
+
+          set +e
           docker run --rm \
+            --user root \
             --network zapnet \
             -v "$PWD/reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable \
@@ -63,11 +67,11 @@ jobs:
             -t http://juice-shop:3000 \
             -r zap-baseline.html \
             -J zap-baseline.json
+          zap_exit=$?
+          set -e
 
-      - name: Upload ZAP reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: zap-baseline-reports
-          path: reports/
-          if-no-files-found: warn
+          echo "ZAP exit code: $zap_exit"
+          echo "Generated files:"
+          ls -la reports/
+
+          exit "$zap_exit"
