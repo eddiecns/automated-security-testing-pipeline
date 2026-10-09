@@ -51,15 +51,14 @@ jobs:
           ls -ld reports
 
 
+
       - name: Run ZAP baseline scan
         id: zap
-        continue-on-error: true
         run: |
           docker pull ghcr.io/zaproxy/zaproxy:stable
 
           set +e
           docker run --rm \
-            --user root \
             --network zapnet \
             -v "$PWD/reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable \
@@ -74,4 +73,14 @@ jobs:
           echo "Generated files:"
           ls -la reports/
 
-          exit "$zap_exit"
+          if [ ! -s reports/zap-baseline.html ] || [ ! -s reports/zap-baseline.json ]; then
+            echo "ERROR: ZAP reports are missing or empty."
+            exit 1
+          fi
+
+          if [ "$zap_exit" -eq 0 ] || [ "$zap_exit" -eq 2 ]; then
+            echo "ZAP completed. Exit code $zap_exit indicates no alerts or warning-level findings."
+          else
+            echo "ERROR: ZAP returned exit code $zap_exit."
+            exit "$zap_exit"
+          fi
