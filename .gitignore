@@ -1,0 +1,6 @@
+
+# Local IDE settings
+.idea/
+
+# Generated ZAP scan reports (retain locally as evidence)
+reports/

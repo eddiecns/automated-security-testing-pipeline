@@ -1,0 +1,71 @@
+﻿
+name: OWASP ZAP Baseline Scan
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  zap-baseline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create Docker network
+        run: docker network create zapnet
+
+      - name: Start OWASP Juice Shop
+        run: |
+          docker pull bkimminich/juice-shop
+          docker run -d \
+            --name juice-shop \
+            --network zapnet \
+            bkimminich/juice-shop
+
+      - name: Wait for Juice Shop
+        run: |
+          for i in {1..30}; do
+            if docker run --rm \
+              --network zapnet \
+              curlimages/curl:latest \
+              -fsS http://juice-shop:3000/ >/dev/null; then
+              echo "Juice Shop is reachable."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Juice Shop did not become ready."
+          docker logs juice-shop
+          exit 1
+
+      - name: Prepare report directory
+        run: mkdir -p reports
+
+      - name: Run ZAP baseline scan
+        id: zap
+        continue-on-error: true
+        run: |
+          docker pull ghcr.io/zaproxy/zaproxy:stable
+          docker run --rm \
+            --network zapnet \
+            -v "$PWD/reports:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+            -t http://juice-shop:3000 \
+            -r zap-baseline.html \
+            -J zap-baseline.json
+
+      - name: Upload ZAP reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-baseline-reports
+          path: reports/
+          if-no-files-found: warn
+'@ | Set-Content -Encoding utf8 .github/workflows/zap-baseline.yml
