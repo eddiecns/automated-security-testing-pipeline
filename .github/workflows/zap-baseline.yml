@@ -10,9 +10,9 @@ permissions:
   contents: read
 
 env:
-  JUICE_SHOP_IMAGE: bkimminich/juice-shop
+  JUICE_SHOP_IMAGE: bkimminich/juice-shop@sha256:42843723a7bf4246aa5d63c324978b17ef296ac78434aeddd34c427bfb5853f4
   ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable@sha256:5ccfff9a411743ab2615136a2edd7416bec9ce41572fa94e935df38c14adb2b6
-  CURL_IMAGE: curlimages/curl:latest
+  CURL_IMAGE: curlimages/curl@sha256:a134550be58ab783810e613ae96fd253c38f7bdd16d9bf9be350700c7a29ac06
 
 jobs:
   zap-baseline:
