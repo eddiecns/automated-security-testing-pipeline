@@ -9,11 +9,19 @@ on:
 permissions:
   contents: read
 
+env:
+  JUICE_SHOP_IMAGE: bkimminich/juice-shop
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable
+  CURL_IMAGE: curlimages/curl:latest
+
 jobs:
   zap-baseline:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Record job start time
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Check out repository
         uses: actions/checkout@v4
 
@@ -22,27 +30,21 @@ jobs:
 
       - name: Start OWASP Juice Shop
         run: |
-          docker pull bkimminich/juice-shop
+          docker pull "$JUICE_SHOP_IMAGE"
           docker run -d \
             --name juice-shop \
             --network zapnet \
-            bkimminich/juice-shop
+            "$JUICE_SHOP_IMAGE"
 
-      - name: Wait for Juice Shop
-        run: |
-          for i in {1..30}; do
-            if docker run --rm \
-              --network zapnet \
-              curlimages/curl:latest \
-              -fsS http://juice-shop:3000/ >/dev/null; then
-              echo "Juice Shop is reachable."
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Juice Shop did not become ready."
-          docker logs juice-shop
-          exit 1
+          JS_DIGEST=$(docker image inspect \
+            --format '{{index .RepoDigests 0}}' \
+            "$JUICE_SHOP_IMAGE")
+          JS_LABEL=$(docker image inspect \
+            --format '{{index .Config.Labels "org.opencontainers.image.version"}}' \
+            "$JUICE_SHOP_IMAGE" 2>/dev/null || true)
+
+          echo "JS_DIGEST=${JS_DIGEST:-unavailable}" >> "$GITHUB_ENV"
+          echo "JS_LABEL=${JS_LABEL:-unavailable}" >> "$GITHUB_ENV"
 
       - name: Prepare report directory
         run: |
@@ -50,37 +52,173 @@ jobs:
           chmod 777 reports
           ls -ld reports
 
+      - name: Wait for Juice Shop
+        run: |
+          docker pull "$CURL_IMAGE"
 
+          CURL_DIGEST=$(docker image inspect \
+            --format '{{index .RepoDigests 0}}' \
+            "$CURL_IMAGE")
+          echo "CURL_DIGEST=${CURL_DIGEST:-unavailable}" >> "$GITHUB_ENV"
+
+          for i in {1..30}; do
+            if docker run --rm \
+              --network zapnet \
+              "$CURL_IMAGE" \
+              -fsS http://juice-shop:3000/ >/dev/null; then
+              echo "Juice Shop is reachable."
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "Juice Shop did not become ready."
+          docker logs juice-shop
+          exit 1
+
+      - name: Record Juice Shop version response
+        run: |
+          if ! docker run --rm \
+            --network zapnet \
+            "$CURL_IMAGE" \
+            -fsS http://juice-shop:3000/rest/admin/application-version \
+            > reports/juice-shop-version-response.txt; then
+            printf '%s\n' 'unavailable' \
+              > reports/juice-shop-version-response.txt
+          fi
 
       - name: Run ZAP baseline scan
         id: zap
         run: |
-          docker pull ghcr.io/zaproxy/zaproxy:stable
+          docker pull "$ZAP_IMAGE"
+
+          ZAP_DIGEST=$(docker image inspect \
+            --format '{{index .RepoDigests 0}}' \
+            "$ZAP_IMAGE")
+          echo "ZAP_DIGEST=${ZAP_DIGEST:-unavailable}" >> "$GITHUB_ENV"
 
           set +e
+          SCAN_START=$(date +%s)
+
           docker run --rm \
             --network zapnet \
             -v "$PWD/reports:/zap/wrk/:rw" \
-            ghcr.io/zaproxy/zaproxy:stable \
+            "$ZAP_IMAGE" \
             zap-baseline.py \
             -t http://juice-shop:3000 \
             -r zap-baseline.html \
             -J zap-baseline.json
-          zap_exit=$?
+
+          ZAP_EXIT=$?
+          SCAN_END=$(date +%s)
           set -e
 
-          echo "ZAP exit code: $zap_exit"
+          echo "ZAP_EXIT=$ZAP_EXIT" >> "$GITHUB_ENV"
+          echo "SCAN_START=$SCAN_START" >> "$GITHUB_ENV"
+          echo "SCAN_END=$SCAN_END" >> "$GITHUB_ENV"
+
+          echo "ZAP exit code: $ZAP_EXIT"
           echo "Generated files:"
           ls -la reports/
 
-          if [ ! -s reports/zap-baseline.html ] || [ ! -s reports/zap-baseline.json ]; then
+          if [ ! -s reports/zap-baseline.html ] || \
+             [ ! -s reports/zap-baseline.json ]; then
             echo "ERROR: ZAP reports are missing or empty."
             exit 1
           fi
 
-          if [ "$zap_exit" -eq 0 ] || [ "$zap_exit" -eq 2 ]; then
-            echo "ZAP completed. Exit code $zap_exit indicates no alerts or warning-level findings."
+          if [ "$ZAP_EXIT" -eq 0 ]; then
+            echo "ZAP completed with exit code 0."
+          elif [ "$ZAP_EXIT" -eq 2 ]; then
+            echo "ZAP completed with warning-level findings (exit code 2)."
           else
-            echo "ERROR: ZAP returned exit code $zap_exit."
-            exit "$zap_exit"
+            echo "ERROR: ZAP returned exit code $ZAP_EXIT."
+            exit "$ZAP_EXIT"
           fi
+
+      - name: Write run metadata
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_NUMBER: ${{ github.run_number }}
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUNNER_OS: ${{ runner.os }}
+          RUNNER_ARCH: ${{ runner.arch }}
+        run: |
+          mkdir -p reports
+
+          JOB_END=$(date +%s)
+
+          SCAN_DURATION="unavailable"
+          if [[ "${SCAN_START:-}" =~ ^[0-9]+$ ]] && \
+             [[ "${SCAN_END:-}" =~ ^[0-9]+$ ]]; then
+            SCAN_DURATION=$((SCAN_END - SCAN_START))
+          fi
+
+          JOB_DURATION="unavailable"
+          if [[ "${JOB_START:-}" =~ ^[0-9]+$ ]]; then
+            JOB_DURATION=$((JOB_END - JOB_START))
+          fi
+
+          jq -n \
+            --arg run_id "$RUN_ID" \
+            --arg run_attempt "$RUN_ATTEMPT" \
+            --arg run_number "$RUN_NUMBER" \
+            --arg event "$EVENT_NAME" \
+            --arg commit_sha "$COMMIT_SHA" \
+            --arg runner_os "$RUNNER_OS" \
+            --arg runner_arch "$RUNNER_ARCH" \
+            --arg juice_shop_image "$JUICE_SHOP_IMAGE" \
+            --arg juice_shop_image_digest "${JS_DIGEST:-unavailable}" \
+            --arg juice_shop_version_label "${JS_LABEL:-unavailable}" \
+            --arg curl_image "$CURL_IMAGE" \
+            --arg curl_image_digest "${CURL_DIGEST:-unavailable}" \
+            --arg zap_image "$ZAP_IMAGE" \
+            --arg zap_image_digest "${ZAP_DIGEST:-unavailable}" \
+            --arg zap_exit_code "${ZAP_EXIT:-unavailable}" \
+            --arg scan_start_epoch "${SCAN_START:-unavailable}" \
+            --arg scan_end_epoch "${SCAN_END:-unavailable}" \
+            --arg scan_duration_seconds "$SCAN_DURATION" \
+            --arg job_duration_seconds_to_metadata "$JOB_DURATION" \
+            --rawfile juice_shop_version_response \
+              reports/juice-shop-version-response.txt \
+            '{
+              run_id: $run_id,
+              run_attempt: $run_attempt,
+              run_number: $run_number,
+              event: $event,
+              commit_sha: $commit_sha,
+              runner_os: $runner_os,
+              runner_arch: $runner_arch,
+              juice_shop_image: $juice_shop_image,
+              juice_shop_image_digest: $juice_shop_image_digest,
+              juice_shop_version_label: $juice_shop_version_label,
+              juice_shop_version_response: $juice_shop_version_response,
+              curl_image: $curl_image,
+              curl_image_digest: $curl_image_digest,
+              zap_image: $zap_image,
+              zap_image_digest: $zap_image_digest,
+              zap_exit_code: $zap_exit_code,
+              scan_start_epoch: $scan_start_epoch,
+              scan_end_epoch: $scan_end_epoch,
+              scan_duration_seconds: $scan_duration_seconds,
+              job_duration_seconds_to_metadata: $job_duration_seconds_to_metadata
+            }' > reports/run-metadata.json
+
+          echo "Run metadata:"
+          cat reports/run-metadata.json
+
+          echo "Validating metadata JSON..."
+          jq empty reports/run-metadata.json
+
+      - name: Upload ZAP reports and run metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 90
