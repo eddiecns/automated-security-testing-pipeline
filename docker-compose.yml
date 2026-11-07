@@ -1,0 +1,13 @@
+# Local OWASP Juice Shop for manual security testers.
+# Pinned to the SAME image digest the pipeline scans (Juice Shop 20.3.0),
+# so manual and automated results are comparable.
+# If the pipeline's digest changes, update it here too.
+services:
+  juice-shop:
+    image: bkimminich/juice-shop@sha256:42843723a7bf4246aa5d63c324978b17ef296ac78434aeddd34c427bfb5853f4
+    container_name: juice-shop-manual
+    ports:
+      # Bound to localhost only: this app is deliberately vulnerable,
+      # so it should not be reachable from other machines on the network.
+      - "127.0.0.1:3000:3000"
+    restart: "no"
